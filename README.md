@@ -55,14 +55,14 @@ Note that at least Python 3.8+ is required.
 
 ```
 docker run -it --name matrix-archive \
--v ":/matrix-archive/key.txt" \
--v ":/matrix-archive/chats" \
+-v ":/matrix_archive/key.txt" \
+-v ":/matrix_archive/chats" \
 -e "SERVER=https://yourhomeserver" \
 -e "USER=@user:yourhomeserver" \
 -e "USERPASS=yourpassword" \
 -e "KEYPASS=passwordforkeyfile" \
 -e "ROOMSTR=--all-rooms" \
-orangemeow/matrix-archive:1.0
+orangemeow/matrix-archive:latest
 ```
 
 Note that ROOMSTR can be set to strings like:
@@ -73,7 +73,7 @@ The latter part(```!abcdefg:yourhomeserver```) is your room id which can be obta
 
 You can override .py files with volumes:
 ```
--v "your-.py-file:/matrix-archive/matrix-archive.py" \
--v "your-.py-file:/matrix-archive/db.py" \
--v "your-.py-file:/matrix-archive/utils.py" \
+-v "your-.py-file:/matrix_archive/matrix-archive.py" \
+-v "your-.py-file:/matrix_archive/db.py" \
+-v "your-.py-file:/matrix_archive/utils.py" \
 ```
