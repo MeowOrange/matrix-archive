@@ -2,6 +2,8 @@
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/orangemeow/matrix-archive.svg)](https://hub.docker.com/r/orangemeow/matrix-archive)
 
+[![GitHub](https://img.shields.io/static/v1?style=for-the-badge&message=GitHub&color=181717&logo=GitHub&logoColor=FFFFFF&label=)](https://github.com/MeowOrange/matrix-archive)
+
 Archive Matrix room messages. Based on the project [matrix-archive](https://github.com/russelldavies/matrix-archive)
 
 Save room messages into SQLite3 database, including media, implemented auto deduplication on media files.
