@@ -58,7 +58,7 @@ docker run -it --name matrix-archive \
 -e "USERPASS=yourpassword" \
 -e "KEYPASS=passwordforkeyfile" \
 -e "ROOMSTR=--all-rooms" \
-matrix-archive:test
+orangemeow/matrix-archive:1.0
 ```
 
 Note that ROOMSTR can be set to strings like:
@@ -66,3 +66,10 @@ Note that ROOMSTR can be set to strings like:
 ROOMSTR=--room !abcdefg:yourhomeserver
 ```
 The latter part(```!abcdefg:yourhomeserver```) is your room id which can be obtained
+
+You can override .py files with volumes:
+```
+-v "your-.py-file:/matrix-archive/matrix-archive.py" \
+-v "your-.py-file:/matrix-archive/db.py" \
+-v "your-.py-file:/matrix-archive/utils.py" \
+```
