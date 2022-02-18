@@ -1,14 +1,16 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
+import re
 import sqlite3
 
 
 class DB:
 
-    def __init__(self, filename):
+    def __init__(self, filename, roomname):
+        self.sqls_insert=[]
+        self.sqls_update=[]
         self.filename = filename
         self.conn = sqlite3.connect(self.filename)
-        print("Database opened.")
         try:
             cmd_create_MESSAGE = '''
                 CREATE TABLE IF NOT EXISTS MESSAGE
@@ -28,7 +30,6 @@ class DB:
                 '''
             self.conn.execute(cmd_create_MESSAGE)
             self.conn.execute(cmd_create_MEDIA)
-            print("Tables ready.")
             cmd_create_MESSAGE_INDEX_UNIQUE = '''
                 CREATE UNIQUE INDEX IF NOT EXISTS index_eventid ON MESSAGE (EVENT_ID);  
                 '''
@@ -41,12 +42,11 @@ class DB:
             self.conn.execute(cmd_create_MESSAGE_INDEX_UNIQUE)
             self.conn.execute(cmd_create_MESSAGE_INDEX_DATE)
             self.conn.execute(cmd_create_MEDIA_INDEX)
-            print("Indexes ready.")
         except:
-            print("Create table failed.")
+            print("Preparing table failed.")
             return False
         self.c = self.conn.cursor()
-        print("Database ready.")
+        print(f"Database ready for room: {roomname}")
 
     def get_media_with_hash(self, hash):
         cursor = self.c.execute(
@@ -67,17 +67,54 @@ class DB:
 
     def insert_event(self, id, category, date, body, sender, media_uuid, source):
         args = (id, category, date, body, sender, media_uuid, source)
-        self.c.execute(
-            "insert into MESSAGE (EVENT_ID, CATEGORY, DATE, BODY, SENDER, MEDIA_UUID, SOURCE) values (?, ?, ?, ?, ?, ?, ?)", args)
+
+        self.sqls_insert.append(args)
+        if len(self.sqls_insert) >= 100:
+            for arg in self.sqls_insert:
+                self.c.execute(
+                    "insert into MESSAGE (EVENT_ID, CATEGORY, DATE, BODY, SENDER, MEDIA_UUID, SOURCE) values (?, ?, ?, ?, ?, ?, ?)", arg)
+            self.sqls_insert.clear()
+            self.conn.commit()
+
+    def update_event(self, id, category, date, body, sender, media_uuid, source):
+        args = (category, date, body, sender, media_uuid, source, id)
+
+        self.sqls_update.append(args)
+        if len(self.sqls_update) >= 100:
+            for arg in self.sqls_update:
+                self.c.execute(
+                    "update MESSAGE set CATEGORY = ?, DATE = ?, BODY = ?, SENDER = ?, MEDIA_UUID = ?, SOURCE = ? where EVENT_ID = ?", arg)
+            self.sqls_update.clear()
+            self.conn.commit()
+
+    def flush_events(self):
+        for arg_insert in self.sqls_insert:
+            self.c.execute(
+                    "insert into MESSAGE (EVENT_ID, CATEGORY, DATE, BODY, SENDER, MEDIA_UUID, SOURCE) values (?, ?, ?, ?, ?, ?, ?)", arg_insert)
+        self.sqls_insert.clear()
+        self.conn.commit()
+        for arg_update in self.sqls_update:
+            self.c.execute(
+                    "update MESSAGE set CATEGORY = ?, DATE = ?, BODY = ?, SENDER = ?, MEDIA_UUID = ?, SOURCE = ? where EVENT_ID = ?", arg_update)
+        self.sqls_update.clear()
         self.conn.commit()
 
-    def event_exists(self, event_id):
+
+    def event_exists(self, event):
         cursor = self.c.execute(
-            "select EVENT_ID from MESSAGE where EVENT_ID = ?", (event_id, ))
-        a = 0
+            "select EVENT_ID, CATEGORY from MESSAGE where EVENT_ID = ?", (event.event_id, ))
+        results = []
         for row in cursor:
-            a = a + 1
-        if a > 0:
-            return True
-        else:
-            return False
+            rowdict = dict()
+            rowdict['id'] = row[0]
+            rowdict['category'] = row[1]
+            results.append(rowdict)
+        for result in results:
+            if ("BadEvent" in str(result['category']) or ("Unknown" in str(result['category']))):
+                if ("BadEvent" in str(type(event))) or ("Unknown" in str(type(event))):
+                    return "nodo"
+                else:
+                    return "update"
+            else:
+                return "nodo"
+        return "insert"

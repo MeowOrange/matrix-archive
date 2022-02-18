@@ -1,44 +1,8 @@
 #!/usr/bin/env python3
 
-"""matrix-archive
-
-Archive Matrix room messages. Creates a YAML log of all room
-messages, including media.
-
-Use the unattended batch mode to fetch everything in one go without
-having to type anything during script execution. You can set all
-the necessary values with arguments to your command call.
-
-If you don't want to put your passwords in the command call, you
-can still set the default values for homeserver, user ID and room
-keys path already to have them suggested to you during interactive
-execution. Rooms that you specify in the command call will be
-automatically fetched before prompting for further input.
-
-Example calls:
-
-./matrix-archive.py
-    Run program in interactive mode.
-
-./matrix-archive.py backups
-    Set output folder for selected rooms.
-
-./matrix-archive.py --batch --server https://matrix.org --user '@user:matrix.org' --userpass secret --keys element-keys.txt --keyspass secret
-    Use unattended batch mode to login.
-
-./matrix-archive.py --room '!Abcdefghijklmnopqr:matrix.org'
-    Automatically fetch a room.
-
-./matrix-archive.py --room '!Abcdefghijklmnopqr:matrix.org' --room '!Bcdefghijklmnopqrs:matrix.org'
-    Automatically fetch two rooms.
-
-./matrix-archive.py --roomregex '.*:matrix.org'
-    Automatically fetch every rooms which matches a regex pattern.
-
-./matrix-archive.py --all-rooms
-    Automatically fetch all available rooms.
-
-"""
+# TODO: 判断消息下载过时，确认消息是否曾经是BadEvent
+# TODO: 封装提取消息部分，如果曾经下载过但是是BadEvent，更新之
+#TODO: 优化messages.json输出
 
 from gc import set_debug
 from nio import (
@@ -79,7 +43,6 @@ import re
 import sys
 import json
 import datetime
-
 
 DEVICE_NAME = "matrix-archive"
 
@@ -266,196 +229,234 @@ async def fetch_room_events(
     events = []
     while True:
         response = await client.room_messages(
-            room.room_id, start_token, limit=1000, direction=direction
+            room.room_id, start_token, limit=100, direction=direction
         )
         if len(response.chunk) == 0:
             break
         events.extend(
             event for event in response.chunk if is_valid_event(event))
         start_token = response.end
+        sys.stdout.write(
+            f"Fetched {str(len(events))} events for room {room.display_name}." + '\r')
+        sys.stdout.flush()
+    print('')
     return events
+
+# return a dict of needed values to fill in database and write JSON.
+
+
+async def prepare_event_for_database(event, client, room, db, temp_dir, media_dir):
+
+    # set _sender_name in json
+    sender_name = f"<{event.sender}>"
+    if event.sender in room.users:
+        # If user is still present in room, include current nickname
+        sender_name = f"{room.users[event.sender].display_name} {sender_name}"
+        event.source["_sender_name"] = sender_name
+
+    event_parsed = dict()
+    event_parsed['event_id'] = ""
+    event_parsed['category'] = ""
+    event_parsed['date'] = ""
+    event_parsed['body'] = ""
+    event_parsed['sender'] = ""
+    event_parsed['media_uuid'] = ""
+    event_parsed['source'] = ""
+
+    # set event_id for dict
+    if hasattr(event, "event_id"):
+        event_parsed['event_id'] = event.event_id
+
+    # set category for dict
+    event_parsed['category'] = str(type(event)).replace("<class 'nio.events.room_events.", "") \
+                                               .replace("<class 'nio.events.misc.", "") \
+                                               .replace("<class 'nio.events.", "") \
+                                               .replace("<class 'nio.", "") \
+                                               .replace("'>", "")
+
+    # set message sender and source code for dict
+    if hasattr(event, "sender"):
+        event_parsed['sender'] = event.sender
+    if hasattr(event, "source"):
+        event_parsed['source'] = json.dumps(event.source, indent=4)
+
+    # set timestamp for dict
+    if not dict(event.source).get("origin_server_ts") is None:
+        timestamp = dict(event.source).get("origin_server_ts")
+        date = datetime.datetime.fromtimestamp(timestamp/1000)
+        event_parsed['date'] = date.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        event.source["_date"] = event_parsed['date']
+
+    # get message body is exists for database
+    if hasattr(event, 'body'):
+        event_parsed['body'] = str(event.body)
+
+    # download media if necessary, and de-duplicate media files, organize them in database.
+    # currently for RoomMessageMedia, RoomEncryptedMedia, StickerEvent
+    if isinstance(event, (RoomMessageMedia, RoomEncryptedMedia, StickerEvent)):
+
+        # download file first with a random filename.
+        media_data = await download_mxc(client, event.url)
+        filename = choose_filename(
+            f"{temp_dir}/{str(UTILS.generate_uuid1())}")
+        async with aiofiles.open(filename, "wb") as f_media:
+            try:
+                await f_media.write(
+                    crypto.attachments.decrypt_attachment(
+                        media_data,
+                        event.source["content"]["file"]["key"]["k"],
+                        event.source["content"]["file"]["hashes"]["sha256"],
+                        event.source["content"]["file"]["iv"],
+                    )
+                )
+            except KeyError:  # EAFP: Unencrypted media produces KeyError
+                await f_media.write(media_data)
+        # Set atime and mtime of file to event timestamp
+        os.utime(filename, ns=(
+            (event.server_timestamp * 1000000,) * 2))
+
+        # oraganize file in database, get new filename.
+        new_name = UTILS.put_media(filename, media_dir, db)
+        event.source["_file_path"] = new_name
+        event_parsed['media_uuid'] = new_name
+
+    # download avatars for user who changes avatar, and de-duplicate media files, organize them in database.
+    # currently for RoomMemberEvent
+    if isinstance(event, (RoomMemberEvent)):
+
+        # look for avatar_url
+        avatar_url = dict(event.content).get('avatar_url')
+        if not (avatar_url is None):
+
+            # download file first with a random filename.
+            media_data = await download_mxc(client, avatar_url)
+            filename = choose_filename(
+                f"{temp_dir}/{str(UTILS.generate_uuid1())}")
+            event.source["_file_path"] = filename
+            async with aiofiles.open(filename, "wb") as f_media:
+                try:
+                    await f_media.write(
+                        crypto.attachments.decrypt_attachment(
+                            media_data,
+                            event.source["content"]["file"]["key"]["k"],
+                            event.source["content"]["file"]["hashes"]["sha256"],
+                            event.source["content"]["file"]["iv"],
+                        )
+                    )
+                except KeyError:  # EAFP: Unencrypted media produces KeyError
+                    await f_media.write(media_data)
+                # Set atime and mtime of file to event timestamp
+                os.utime(filename, ns=(
+                    (event.server_timestamp * 1000000,) * 2))
+
+            # oraganize file in database, get new filename.
+            new_name = UTILS.put_media(
+                filename, media_dir, db)
+            event.source["_file_path"] = new_name
+            event_parsed['media_uuid'] = new_name
+
+    # download avatars for rooms changing avatar, and de-duplicate media files, organize them in database.
+    # currently for RoomAvatarEvent
+    if isinstance(event, (RoomAvatarEvent)):
+
+        # look for content
+        content = dict(event.source).get('content')
+        if not content is None:
+            # look for _url
+            url = dict(content).get('url')
+            if not (url is None):
+
+                # download file first with a random filename.
+                media_data = await download_mxc(client, url)
+                filename = choose_filename(
+                    f"{temp_dir}/{str(UTILS.generate_uuid1())}")
+                event.source["_file_path"] = filename
+                async with aiofiles.open(filename, "wb") as f_media:
+                    try:
+                        await f_media.write(
+                            crypto.attachments.decrypt_attachment(
+                                media_data,
+                                event.source["content"]["file"]["key"]["k"],
+                                event.source["content"]["file"]["hashes"]["sha256"],
+                                event.source["content"]["file"]["iv"],
+                            )
+                        )
+                    except KeyError:  # EAFP: Unencrypted media produces KeyError
+                        await f_media.write(media_data)
+                    # Set atime and mtime of file to event timestamp
+                    os.utime(filename, ns=(
+                        (event.server_timestamp * 1000000,) * 2))
+
+                # oraganize file in database, get new filename.
+                new_name = UTILS.put_media(
+                    filename, media_dir, db)
+                event.source["_file_path"] = new_name
+                event_parsed['media_uuid'] = new_name
+
+    return event_parsed
 
 
 async def write_room_events(client, room):
-    print(f"Fetching {room.room_id} room messages and writing to disk...")
+    print(
+        f"Fetching {room.room_id} room messages (aka {room.display_name}) and writing to disk...")
     sync_resp = await client.sync(
         full_state=True, sync_filter={"room": {"timeline": {"limit": 1}}}
     )
     start_token = sync_resp.rooms.join[room.room_id].timeline.prev_batch
+
     # Generally, it should only be necessary to fetch back events but,
     # sometimes depending on the sync, front events need to be fetched
     # as well.
     fetch_room_events_ = partial(fetch_room_events, client, start_token, room)
     room_short_id = str(room.room_id).split(':')[0].replace("!", "")
     roomdir = mkdir(f"{OUTPUT_DIR}/{room_short_id}")
+
+    # prepare database
     dbfile = f"{roomdir}/data.db"
-    db = DB(dbfile)
+    db = DB(dbfile, room.display_name)
     if not ARGS.no_media:
         temp_dir = mkdir(
             f"{roomdir}/temp")
         media_dir = mkdir(
             f"{roomdir}/media")
+
+    # get filename for message.json this time:
+    messages_json_filename = choose_filename(f"{roomdir}/messages.json")
+
     async with aiofiles.open(
-        f"{roomdir}/messages.json", "w"
+        messages_json_filename, "w"
     ) as f_json:
-        for events in [
-            list(reversed(await fetch_room_events_(MessageDirection.back))),
-            await fetch_room_events_(MessageDirection.front),
-        ]:
-            events_parsed = []
-            process_bar = ShowProcess(len(events), "Phase Accomplished!")
-            for event in events:
-                str_eventid = event.event_id
-                if not db.event_exists(str_eventid):
-                    try:
-                        # get Event Category for Database.
-                        str_category = str(type(event)).replace("<class 'nio.events.room_events.", "") \
-                                                       .replace("<class 'nio.events.misc.", "") \
-                                                       .replace("<class 'nio.events.", "") \
-                                                       .replace("<class 'nio.", "") \
-                                                       .replace("'>", "")
+        list_all_events = list(reversed(await fetch_room_events_(MessageDirection.back))) + list(await fetch_room_events_(MessageDirection.front))
+        process_bar = ShowProcess(len(list_all_events), "Export Accomplished!")
+        events_parsed = []
+        for event in list_all_events:
+            str_eventid = event.event_id
+            if db.event_exists(event) == "insert":
+                try:
+                    event_parsed = await prepare_event_for_database(event, client, room, db, temp_dir, media_dir)
+                    events_parsed.append(event.source)
+                    # insert event into database
+                    db.insert_event(event_parsed['event_id'], event_parsed['category'], event_parsed['date'],
+                                    event_parsed['body'], event_parsed['sender'], event_parsed['media_uuid'], event_parsed['source'])
+                    process_bar.show_process()
+                except exceptions.EncryptionError as e:
+                    print(e, file=sys.stderr)
+            elif db.event_exists(event) == "update":
+                try:
+                    event_parsed = await prepare_event_for_database(event, client, room, db, temp_dir, media_dir)
+                    events_parsed.append(event.source)
+                    # update event in database
+                    db.update_event(event_parsed['event_id'], event_parsed['category'], event_parsed['date'],
+                                    event_parsed['body'], event_parsed['sender'], event_parsed['media_uuid'], event_parsed['source'])
+                    process_bar.show_process()
+                except exceptions.EncryptionError as e:
+                    print(e, file=sys.stderr)
+            else:
+                process_bar.show_process()
 
-                        # set _sender_name in json
-                        sender_name = f"<{event.sender}>"
-                        if event.sender in room.users:
-                            # If user is still present in room, include current nickname
-                            sender_name = f"{room.users[event.sender].display_name} {sender_name}"
-                            event.source["_sender_name"] = sender_name
-
-                        # get timestamp string for both Database and Json output.
-                        if not dict(event.source).get("origin_server_ts") is None:
-                            timestamp = dict(event.source).get(
-                                "origin_server_ts")
-                            date = datetime.datetime.fromtimestamp(
-                                timestamp/1000)
-                            strtimestamp = date.strftime(
-                                "%Y-%m-%d %H:%M:%S.%f")[:-3]
-                            event.source["_date"] = strtimestamp
-
-                        # download media if necessary, and de-duplicate media files, organize them in database.
-                        # currently for RoomMessageMedia, RoomEncryptedMedia, StickerEvent
-                        str_media = ""
-                        if isinstance(event, (RoomMessageMedia, RoomEncryptedMedia, StickerEvent)):
-
-                            # download file first with a random filename.
-                            media_data = await download_mxc(client, event.url)
-                            filename = choose_filename(
-                                f"{temp_dir}/{str(UTILS.generate_uuid1())}")
-                            async with aiofiles.open(filename, "wb") as f_media:
-                                try:
-                                    await f_media.write(
-                                        crypto.attachments.decrypt_attachment(
-                                            media_data,
-                                            event.source["content"]["file"]["key"]["k"],
-                                            event.source["content"]["file"]["hashes"]["sha256"],
-                                            event.source["content"]["file"]["iv"],
-                                        )
-                                    )
-                                except KeyError:  # EAFP: Unencrypted media produces KeyError
-                                    await f_media.write(media_data)
-                                # Set atime and mtime of file to event timestamp
-                                os.utime(filename, ns=(
-                                    (event.server_timestamp * 1000000,) * 2))
-
-                            # oraganize file in database, get new filename.
-                            new_name = UTILS.put_media(filename, media_dir, db)
-                            event.source["_file_path"] = new_name
-                            str_media = new_name
-
-                        # download avatars for user who changes avatar, and de-duplicate media files, organize them in database.
-                        # currently for RoomMemberEvent
-                        if isinstance(event, (RoomMemberEvent)):
-
-                            # look for avatar_url
-                            avatar_url = dict(event.content).get('avatar_url')
-                            if not (avatar_url is None):
-
-                                # download file first with a random filename.
-                                media_data = await download_mxc(client, avatar_url)
-                                filename = choose_filename(
-                                    f"{temp_dir}/{str(UTILS.generate_uuid1())}")
-                                event.source["_file_path"] = filename
-                                async with aiofiles.open(filename, "wb") as f_media:
-                                    try:
-                                        await f_media.write(
-                                            crypto.attachments.decrypt_attachment(
-                                                media_data,
-                                                event.source["content"]["file"]["key"]["k"],
-                                                event.source["content"]["file"]["hashes"]["sha256"],
-                                                event.source["content"]["file"]["iv"],
-                                            )
-                                        )
-                                    except KeyError:  # EAFP: Unencrypted media produces KeyError
-                                        await f_media.write(media_data)
-                                    # Set atime and mtime of file to event timestamp
-                                    os.utime(filename, ns=(
-                                        (event.server_timestamp * 1000000,) * 2))
-
-                                # oraganize file in database, get new filename.
-                                new_name = UTILS.put_media(
-                                    filename, media_dir, db)
-                                event.source["_file_path"] = new_name
-                                str_media = new_name
-
-                        # download avatars for rooms changing avatar, and de-duplicate media files, organize them in database.
-                        # currently for RoomAvatarEvent
-                        if isinstance(event, (RoomAvatarEvent)):
-
-                            # look for content
-                            content = dict(event.source).get('content')
-                            if not content is None:
-                                # look for _url
-                                url = dict(content).get('url')
-                                if not (url is None):
-
-                                    # download file first with a random filename.
-                                    media_data = await download_mxc(client, url)
-                                    filename = choose_filename(
-                                        f"{temp_dir}/{str(UTILS.generate_uuid1())}")
-                                    event.source["_file_path"] = filename
-                                    async with aiofiles.open(filename, "wb") as f_media:
-                                        try:
-                                            await f_media.write(
-                                                crypto.attachments.decrypt_attachment(
-                                                    media_data,
-                                                    event.source["content"]["file"]["key"]["k"],
-                                                    event.source["content"]["file"]["hashes"]["sha256"],
-                                                    event.source["content"]["file"]["iv"],
-                                                )
-                                            )
-                                        except KeyError:  # EAFP: Unencrypted media produces KeyError
-                                            await f_media.write(media_data)
-                                        # Set atime and mtime of file to event timestamp
-                                        os.utime(filename, ns=(
-                                            (event.server_timestamp * 1000000,) * 2))
-
-                                    # oraganize file in database, get new filename.
-                                    new_name = UTILS.put_media(
-                                        filename, media_dir, db)
-                                    event.source["_file_path"] = new_name
-                                    str_media = new_name
-
-                        # write out the processed message source
-                        events_parsed.append(event.source)
-
-                        # get message body is exists for database
-                        str_body = ""
-                        if hasattr(event, 'body'):
-                            str_body = str(event.body)
-
-                        # get message sender and source code
-                        str_sender = event.sender
-                        str_source = json.dumps(event.source, indent=4)
-
-                        # insert event into database
-                        db.insert_event(str_eventid, str_category, strtimestamp,
-                                        str_body, str_sender, str_media, str_source)
-                        process_bar.show_process()
-                    except exceptions.EncryptionError as e:
-                        print(e, file=sys.stderr)
-
-            # serialise message array and write to message.json
-            await f_json.write(json.dumps(events_parsed, indent=4))
+        db.flush_events()
+        # serialise message array and write to message.json
+        await f_json.write(json.dumps(events_parsed, indent=4))
     await save_current_avatars(client, room)
     os.rmdir(temp_dir)
     print("Successfully wrote all room events to disk.")

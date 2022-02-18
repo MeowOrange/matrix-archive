@@ -77,3 +77,38 @@ You can override .py files with volumes:
 -v "your-.py-file:/matrix_archive/db.py" \
 -v "your-.py-file:/matrix_archive/utils.py" \
 ```
+
+# Using on the same server as Matrix homeserver
+
+## Add host to container
+
+Docker run has an argument: ```--add-host```. If the Matrix homeserver is in your internal network, you may use:
+```
+docker run --add-host yourhomeserver:internal-ip-address ...
+```
+to get access to your homeserver.
+
+## Pass through Nginx & Proxy Protocol
+
+In my case, I use [frp](https://github.com/fatedier/frp) to proxy external traffic to homeserver in my internal network, which uses nginx to proxy traffic to Matrix. 
+
+Frp pass the real remote ip to nginx using proxy protocol. When I tried to directly access Matrix with ```--add-host```, nginx stopped me because I'm not using proxy protocol.
+
+And I find [this solution](https://serverfault.com/questions/958608/is-it-possible-to-configure-nginx-to-accept-requests-both-with-and-without-proxy) for this issue. Add the following into the server block in nginx.conf:
+
+```
+listen 127.0.0.1:443 ssl http2 proxy_protocol; # ip for proxy to reach homeserver
+set_real_ip_from     127.0.0.1;                # ip of proxy
+real_ip_header       proxy_protocol;
+
+listen 192.168.0.2:443 ssl; # internal ip of homeserver
+
+...
+
+location / {
+   proxy_set_header X-Real-IP $proxy_protocol_addr;
+   proxy_set_header X-Forwarded-For $proxy_protocol_addr;
+   ...
+   proxy_pass http://127.0.0.1:8008;
+}
+```
