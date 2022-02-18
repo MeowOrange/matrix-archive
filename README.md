@@ -50,6 +50,12 @@ Note that at least Python 3.8+ is required.
       * --keyspass 'your_paassword_for_keys_file'
       * --room: Specify a room or just use --all-rooms
    * --no-media: This is left in the source code by original project. I didn't test that but I kept that in the code anyway.
+   * --no-progress-bar: Disables progress bar while keeps basic log output.
+      * When using docker, this augument can be added to environment variable ROOMSTR, for example:
+
+         ```
+         ROOMSTR=--all-rooms --no-progress-bar
+         ```
 
 # Using Docker
 

@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 
-# TODO: 判断消息下载过时，确认消息是否曾经是BadEvent
-# TODO: 封装提取消息部分，如果曾经下载过但是是BadEvent，更新之
-#TODO: 优化messages.json输出
-
 from gc import set_debug
 from nio import (
     AsyncClient,
@@ -137,6 +133,13 @@ def parse_args():
         help="""Don't download media
              """,
     )
+    parser.add_argument(
+        "--no-progress-bar",
+        dest="no_progress_bar",
+        action="store_true",
+        help="""Don't show progress bar
+             """,
+    )
     return parser.parse_args()
 
 
@@ -236,10 +239,11 @@ async def fetch_room_events(
         events.extend(
             event for event in response.chunk if is_valid_event(event))
         start_token = response.end
-        sys.stdout.write(
-            f"Fetched {str(len(events))} events for room {room.display_name}." + '\r')
-        sys.stdout.flush()
-    print('')
+        if not ARGS.no_progress_bar:
+            sys.stdout.write(
+                f"Fetched {str(len(events))} events for room {room.display_name}." + '\r')
+            sys.stdout.flush()
+    print('Fetch done!')
     return events
 
 # return a dict of needed values to fill in database and write JSON.
@@ -430,7 +434,6 @@ async def write_room_events(client, room):
         process_bar = ShowProcess(len(list_all_events), "Export Accomplished!")
         events_parsed = []
         for event in list_all_events:
-            str_eventid = event.event_id
             if db.event_exists(event) == "insert":
                 try:
                     event_parsed = await prepare_event_for_database(event, client, room, db, temp_dir, media_dir)
@@ -438,7 +441,8 @@ async def write_room_events(client, room):
                     # insert event into database
                     db.insert_event(event_parsed['event_id'], event_parsed['category'], event_parsed['date'],
                                     event_parsed['body'], event_parsed['sender'], event_parsed['media_uuid'], event_parsed['source'])
-                    process_bar.show_process()
+                    if not ARGS.no_progress_bar:
+                        process_bar.show_process()
                 except exceptions.EncryptionError as e:
                     print(e, file=sys.stderr)
             elif db.event_exists(event) == "update":
@@ -448,12 +452,15 @@ async def write_room_events(client, room):
                     # update event in database
                     db.update_event(event_parsed['event_id'], event_parsed['category'], event_parsed['date'],
                                     event_parsed['body'], event_parsed['sender'], event_parsed['media_uuid'], event_parsed['source'])
-                    process_bar.show_process()
+                    if not ARGS.no_progress_bar:
+                        process_bar.show_process()
                 except exceptions.EncryptionError as e:
                     print(e, file=sys.stderr)
             else:
-                process_bar.show_process()
-
+                if not ARGS.no_progress_bar:
+                    process_bar.show_process()
+        if ARGS.no_progress_bar:
+            print("Export Accomplished!")
         db.flush_events()
         # serialise message array and write to message.json
         await f_json.write(json.dumps(events_parsed, indent=4))
