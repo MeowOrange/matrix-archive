@@ -8,11 +8,13 @@ import sys
 import os
 import shutil
 import sys
+from urllib.request import urlretrieve
 import time
 from db import (
     DB
 )
 import filetype
+import requests
 
 
 class UTILS:
@@ -34,8 +36,12 @@ class UTILS:
         uuid = UTILS.generate_uuid1()
         db.insert_media(uuid, hash_current, size_current)
         kind = filetype.guess(file)
-        shutil.move(file, f"{media_dir}/{uuid}.{kind.extension}")
-        return f"{uuid}.{kind.extension}"
+        if not (kind is None):
+            shutil.move(file, f"{media_dir}/{uuid}.{kind.extension}")
+            return f"{uuid}.{kind.extension}"
+        else:
+            shutil.move(file, f"{media_dir}/{uuid}")
+            return f"{uuid}"
 
     @staticmethod
     def file_hash(file):
@@ -56,6 +62,30 @@ class UTILS:
     def generate_uuid1():
         return str(uuid.uuid1()).replace("-", "")
 
+class DOWNLOADER:
+    def __init__(self):
+        self.name = "name"
+    
+    @staticmethod
+    def download_url(url):
+        retries = 9
+        while retries >= 0 :
+            try:
+                request = requests.get(url,timeout=10, stream=True)
+                #with open(file, 'wb') as fh:
+                 #   for chunk in request.iter_content(8192):
+                  #      fh.write(chunk)
+                return request.content
+            except Exception as err:
+                print(f"Download failed. {err}")
+                if (retries > 0):
+                    print("Retrying...")
+                    retries = retries - 1
+                    continue
+                else:
+                    print("No more retries")
+                    retries = retries - 1
+                    raise Exception("Download failed. Please reload this script.")
 
 class ShowProcess():
     i = 0

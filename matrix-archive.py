@@ -2,6 +2,7 @@
 
 from gc import set_debug
 from nio import (
+    Api,
     AsyncClient,
     AsyncClientConfig,
     MatrixRoom,
@@ -24,8 +25,11 @@ from db import (
 )
 from utils import (
     UTILS,
-    ShowProcess
+    ShowProcess,
+    DOWNLOADER
 )
+download_url = DOWNLOADER.download_url
+
 from functools import partial
 from typing import Union, TextIO
 from urllib.parse import urlparse
@@ -208,19 +212,9 @@ async def save_current_avatars(client: AsyncClient, room: MatrixRoom) -> None:
 
 async def download_mxc(client: AsyncClient, url: str):
     mxc = urlparse(url)
-    response = await client.download(mxc.netloc, mxc.path.strip("/"))
-    if hasattr(response, "body"):
-        return response.body
-    else:
-        return b''
-
-
-def is_valid_event(event):
-    events = (RoomMessageFormatted, RedactedEvent)
-    if not ARGS.no_media:
-        events += (RoomMessageMedia, RoomEncryptedMedia)
-    # return isinstance(event, events)
-    return True
+    http_method, path = Api.download(mxc.netloc, mxc.path.strip("/"))
+    content_url = getattr(client, "homeserver", "https://" + mxc.hostname) + path
+    return download_url(content_url)
 
 
 async def fetch_room_events(
@@ -237,7 +231,7 @@ async def fetch_room_events(
         if len(response.chunk) == 0:
             break
         events.extend(
-            event for event in response.chunk if is_valid_event(event))
+            event for event in response.chunk)
         start_token = response.end
         if not ARGS.no_progress_bar:
             sys.stdout.write(
