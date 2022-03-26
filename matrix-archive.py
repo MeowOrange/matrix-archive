@@ -1,48 +1,49 @@
 #!/usr/bin/env python3
+# -*- coding: UTF-8 -*-
 
-from gc import set_debug
+import argparse
+import asyncio
+import datetime
+import getpass
+import itertools
+import json
+import os
+import re
+import sys
+from functools import partial
+from urllib.parse import urlparse
+
+import aiofiles
 from nio import (
     Api,
     AsyncClient,
     AsyncClientConfig,
     MatrixRoom,
     MessageDirection,
-    RedactedEvent,
     RoomEncryptedMedia,
     StickerEvent,
     RoomMemberEvent,
     RoomAvatarEvent,
-    RoomMessage,
-    RoomMessageFormatted,
     RoomMessageMedia,
     crypto,
     store,
     exceptions
 )
 
+import utils
 from db import (
     DB
 )
 from utils import (
-    UTILS,
+    put_media,
+    generate_uuid1,
+    download_url,
+    mkdir,
+    log,
     ShowProcess,
-    DOWNLOADER
+    NetworkException,
+    DatabaseException
 )
-download_url = DOWNLOADER.download_url
-
-from functools import partial
-from typing import Union, TextIO
-from urllib.parse import urlparse
-import aiofiles
-import argparse
-import asyncio
-import getpass
-import itertools
-import os
-import re
-import sys
-import json
-import datetime
 
 DEVICE_NAME = "matrix-archive"
 
@@ -144,15 +145,14 @@ def parse_args():
         help="""Don't show progress bar
              """,
     )
+    parser.add_argument(
+        "--no-logs",
+        dest="no_logs",
+        action="store_true",
+        help="""Don't show progress bar
+             """,
+    )
     return parser.parse_args()
-
-
-def mkdir(path):
-    try:
-        os.mkdir(path)
-    except FileExistsError:
-        pass
-    return path
 
 
 async def create_client() -> AsyncClient:
@@ -177,15 +177,15 @@ async def create_client() -> AsyncClient:
         room_keys_path = input(
             f"Enter full path to room E2E keys: [{room_keys_path}] ") or room_keys_path
         room_keys_password = getpass.getpass("Room keys password: ")
-    print("Importing keys. This may take a while...")
+    log("Importing keys. This may take a while...")
     await client.import_keys(room_keys_path, room_keys_password)
     return client
 
 
 async def select_room(client: AsyncClient) -> MatrixRoom:
-    print("\nList of joined rooms (room id, display name):")
+    log("\nList of joined rooms (room id, display name):")
     for room_id, room in client.rooms.items():
-        print(f"{room_id}, {room.display_name}")
+        log(f"{room_id}, {room.display_name}")
     room_id = input(f"Enter room id: ")
     return client.rooms[room_id]
 
@@ -200,7 +200,7 @@ def choose_filename(filename):
 
 
 async def save_current_avatars(client: AsyncClient, room: MatrixRoom) -> None:
-    room_short_id = str(room.room_id).split(':')[0].replace("!", "")
+    room_short_id = str(room.room_id).split(':')[0].replace("!", "").replace("/", "_")
     roomdir = mkdir(f"{OUTPUT_DIR}/{room_short_id}")
     avatar_dir = mkdir(
         f"{roomdir}/currentavatars")
@@ -218,10 +218,10 @@ async def download_mxc(client: AsyncClient, url: str):
 
 
 async def fetch_room_events(
-    client: AsyncClient,
-    start_token: str,
-    room: MatrixRoom,
-    direction: MessageDirection,
+        client: AsyncClient,
+        start_token: str,
+        room: MatrixRoom,
+        direction: MessageDirection,
 ) -> list:
     events = []
     while True:
@@ -237,14 +237,14 @@ async def fetch_room_events(
             sys.stdout.write(
                 f"Fetched {str(len(events))} events for room {room.display_name}." + '\r')
             sys.stdout.flush()
-    print('Fetch done!')
+    log('Fetch done!')
     return events
+
 
 # return a dict of needed values to fill in database and write JSON.
 
 
 async def prepare_event_for_database(event, client, room, db, temp_dir, media_dir):
-
     # set _sender_name in json
     sender_name = f"<{event.sender}>"
     if event.sender in room.users:
@@ -267,10 +267,10 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
 
     # set category for dict
     event_parsed['category'] = str(type(event)).replace("<class 'nio.events.room_events.", "") \
-                                               .replace("<class 'nio.events.misc.", "") \
-                                               .replace("<class 'nio.events.", "") \
-                                               .replace("<class 'nio.", "") \
-                                               .replace("'>", "")
+        .replace("<class 'nio.events.misc.", "") \
+        .replace("<class 'nio.events.", "") \
+        .replace("<class 'nio.", "") \
+        .replace("'>", "")
 
     # set message sender and source code for dict
     if hasattr(event, "sender"):
@@ -281,7 +281,7 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
     # set timestamp for dict
     if not dict(event.source).get("origin_server_ts") is None:
         timestamp = dict(event.source).get("origin_server_ts")
-        date = datetime.datetime.fromtimestamp(timestamp/1000)
+        date = datetime.datetime.fromtimestamp(timestamp / 1000)
         event_parsed['date'] = date.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         event.source["_date"] = event_parsed['date']
 
@@ -296,7 +296,7 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
         # download file first with a random filename.
         media_data = await download_mxc(client, event.url)
         filename = choose_filename(
-            f"{temp_dir}/{str(UTILS.generate_uuid1())}")
+            f"{temp_dir}/{str(generate_uuid1())}")
         async with aiofiles.open(filename, "wb") as f_media:
             try:
                 await f_media.write(
@@ -311,10 +311,10 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
                 await f_media.write(media_data)
         # Set atime and mtime of file to event timestamp
         os.utime(filename, ns=(
-            (event.server_timestamp * 1000000,) * 2))
+                (event.server_timestamp * 1000000,) * 2))
 
         # oraganize file in database, get new filename.
-        new_name = UTILS.put_media(filename, media_dir, db)
+        new_name = put_media(filename, media_dir, db)
         event.source["_file_path"] = new_name
         event_parsed['media_uuid'] = new_name
 
@@ -329,7 +329,7 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
             # download file first with a random filename.
             media_data = await download_mxc(client, avatar_url)
             filename = choose_filename(
-                f"{temp_dir}/{str(UTILS.generate_uuid1())}")
+                f"{temp_dir}/{str(generate_uuid1())}")
             event.source["_file_path"] = filename
             async with aiofiles.open(filename, "wb") as f_media:
                 try:
@@ -345,10 +345,10 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
                     await f_media.write(media_data)
                 # Set atime and mtime of file to event timestamp
                 os.utime(filename, ns=(
-                    (event.server_timestamp * 1000000,) * 2))
+                        (event.server_timestamp * 1000000,) * 2))
 
             # oraganize file in database, get new filename.
-            new_name = UTILS.put_media(
+            new_name = put_media(
                 filename, media_dir, db)
             event.source["_file_path"] = new_name
             event_parsed['media_uuid'] = new_name
@@ -367,7 +367,7 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
                 # download file first with a random filename.
                 media_data = await download_mxc(client, url)
                 filename = choose_filename(
-                    f"{temp_dir}/{str(UTILS.generate_uuid1())}")
+                    f"{temp_dir}/{str(generate_uuid1())}")
                 event.source["_file_path"] = filename
                 async with aiofiles.open(filename, "wb") as f_media:
                     try:
@@ -383,10 +383,10 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
                         await f_media.write(media_data)
                     # Set atime and mtime of file to event timestamp
                     os.utime(filename, ns=(
-                        (event.server_timestamp * 1000000,) * 2))
+                            (event.server_timestamp * 1000000,) * 2))
 
                 # oraganize file in database, get new filename.
-                new_name = UTILS.put_media(
+                new_name = put_media(
                     filename, media_dir, db)
                 event.source["_file_path"] = new_name
                 event_parsed['media_uuid'] = new_name
@@ -395,7 +395,7 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
 
 
 async def write_room_events(client, room):
-    print(
+    log(
         f"Fetching {room.room_id} room messages (aka {room.display_name}) and writing to disk...")
     sync_resp = await client.sync(
         full_state=True, sync_filter={"room": {"timeline": {"limit": 1}}}
@@ -406,7 +406,7 @@ async def write_room_events(client, room):
     # sometimes depending on the sync, front events need to be fetched
     # as well.
     fetch_room_events_ = partial(fetch_room_events, client, start_token, room)
-    room_short_id = str(room.room_id).split(':')[0].replace("!", "")
+    room_short_id = str(room.room_id).split(':')[0].replace("!", "").replace("/", "_")
     roomdir = mkdir(f"{OUTPUT_DIR}/{room_short_id}")
 
     # prepare database
@@ -422,9 +422,10 @@ async def write_room_events(client, room):
     messages_json_filename = choose_filename(f"{roomdir}/messages.json")
 
     async with aiofiles.open(
-        messages_json_filename, "w"
+            messages_json_filename, "w"
     ) as f_json:
-        list_all_events = list(reversed(await fetch_room_events_(MessageDirection.back))) + list(await fetch_room_events_(MessageDirection.front))
+        list_all_events = list(reversed(await fetch_room_events_(MessageDirection.back))) + list(
+            await fetch_room_events_(MessageDirection.front))
         process_bar = ShowProcess(len(list_all_events), "Export Accomplished!")
         events_parsed = []
         for event in list_all_events:
@@ -434,33 +435,35 @@ async def write_room_events(client, room):
                     events_parsed.append(event.source)
                     # insert event into database
                     db.insert_event(event_parsed['event_id'], event_parsed['category'], event_parsed['date'],
-                                    event_parsed['body'], event_parsed['sender'], event_parsed['media_uuid'], event_parsed['source'])
+                                    event_parsed['body'], event_parsed['sender'], event_parsed['media_uuid'],
+                                    event_parsed['source'])
                     if not ARGS.no_progress_bar:
                         process_bar.show_process()
                 except exceptions.EncryptionError as e:
-                    print(e, file=sys.stderr)
+                    log(e, file=sys.stderr)
             elif db.event_exists(event) == "update":
                 try:
                     event_parsed = await prepare_event_for_database(event, client, room, db, temp_dir, media_dir)
                     events_parsed.append(event.source)
                     # update event in database
                     db.update_event(event_parsed['event_id'], event_parsed['category'], event_parsed['date'],
-                                    event_parsed['body'], event_parsed['sender'], event_parsed['media_uuid'], event_parsed['source'])
+                                    event_parsed['body'], event_parsed['sender'], event_parsed['media_uuid'],
+                                    event_parsed['source'])
                     if not ARGS.no_progress_bar:
                         process_bar.show_process()
                 except exceptions.EncryptionError as e:
-                    print(e, file=sys.stderr)
+                    log(e, file=sys.stderr)
             else:
                 if not ARGS.no_progress_bar:
                     process_bar.show_process()
         if ARGS.no_progress_bar:
-            print("Export Accomplished!")
+            log("Export Accomplished!")
         db.flush_events()
         # serialise message array and write to message.json
         await f_json.write(json.dumps(events_parsed, indent=4))
     await save_current_avatars(client, room)
     os.rmdir(temp_dir)
-    print("Successfully wrote all room events to disk.")
+    log("Successfully wrote all room events to disk.")
 
 
 async def main() -> None:
@@ -474,7 +477,7 @@ async def main() -> None:
             # Iterate over rooms to see if a room has been selected to
             # be automatically fetched
             if room_id in ARGS.room or any(re.match(pattern, room_id) for pattern in ARGS.roomregex):
-                print(f"Selected room: {room_id}")
+                log(f"Selected room: {room_id}")
                 await write_room_events(client, room)
         if ARGS.batch:
             # If the program is running in unattended batch mode,
@@ -484,7 +487,19 @@ async def main() -> None:
             while True:
                 room = await select_room(client)
                 await write_room_events(client, room)
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as ki:
+        log(ki, file=sys.stderr)
+        sys.exit(1)
+    except NetworkException as ne:
+        log(ne.message + ', Details:', file=sys.stderr)
+        log(ne.details, file=sys.stderr)
+        sys.exit(4)
+    except DatabaseException as de:
+        log(de.message + ', Details:', file=sys.stderr)
+        log(de.details, file=sys.stderr)
+        sys.exit(3)
+    except Exception as err:
+        log(err, file=sys.stderr)
         sys.exit(1)
     finally:
         await client.logout()
@@ -497,4 +512,6 @@ if __name__ == "__main__":
         # Select all rooms by adding a regex pattern which matches every string
         ARGS.roomregex.append(".*")
     OUTPUT_DIR = mkdir(ARGS.folder)
+    utils.NO_LOG = ARGS.no_logs
+    utils.LOG_NAME = ''
     asyncio.run(main())

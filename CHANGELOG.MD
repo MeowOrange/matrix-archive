@@ -1,3 +1,7 @@
+# 2022-03-26 tag:1.4
+* Added exit code, log file output
+* Handles room ids containing '/'
+
 # 2022-03-12 tag:1.3
 * Optimized download mekanism to prevent script from stuck during downloading
 

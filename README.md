@@ -33,7 +33,7 @@ Note that at least Python 3.8+ is required.
 1. Download your E2E room keys: in the client Element you can do this by
    clicking on your profile icon, _Security & privacy_, _Export E2E room keys_.
 
-2.  Run with an optional directory to store output, e.g.: `./matrix-archive.py chats`
+2. Run with an optional directory to store output, e.g.: `./matrix-archive.py chats`
 
 3. You'll be prompted to enter your homeserver, user credentials and the path
    to the room keys you downloaded in step 1.
@@ -51,11 +51,17 @@ Note that at least Python 3.8+ is required.
       * --room: Specify a room or just use --all-rooms
    * --no-media: This is left in the source code by original project. I didn't test that but I kept that in the code anyway.
    * --no-progress-bar: Disables progress bar while keeps basic log output.
-      * When using docker, this augument can be added to environment variable ROOMSTR, for example:
+   * --no-logs: Disables log file output.
+     * When using docker, these arguments can be added to environment variable ARGS, for example:
 
-         ```
-         ROOMSTR=--all-rooms --no-progress-bar
-         ```
+        ```
+        ARGS=--no-progress-bar --no-logs
+        ```
+6. Script has exit code:
+    * Exit code 0 for successful fetched all events.
+    * Exit code 1 for misc errors and exceptions.
+    * Exit code 3 for database errors.
+    * Exit code 4 for downloading errors.
 
 # Using Docker
 
@@ -68,6 +74,7 @@ docker run -it --name matrix-archive \
 -e "USERPASS=yourpassword" \
 -e "KEYPASS=passwordforkeyfile" \
 -e "ROOMSTR=--all-rooms" \
+-e "ARGS=--no-progress-bar --no-logs" \
 orangemeow/matrix-archive:latest
 ```
 
