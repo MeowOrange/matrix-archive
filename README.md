@@ -69,6 +69,7 @@ Note that at least Python 3.8+ is required.
 docker run -it --name matrix-archive \
 -v ":/matrix_archive/key.txt" \
 -v ":/matrix_archive/chats" \
+-v ":/matrix_archive/logs" \
 -e "SERVER=https://yourhomeserver" \
 -e "USER=@user:yourhomeserver" \
 -e "USERPASS=yourpassword" \
