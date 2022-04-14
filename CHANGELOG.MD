@@ -1,3 +1,9 @@
+# 2022-04-14 tag:1.5
+* Added flag --no-avatars
+* Implemented flag --no-media
+* Handles user ids containing '_'
+* Try-except 'TypeError's when downloading media files
+
 # 2022-03-26 tag:1.4
 * Added exit code, log file output
 * Handles room ids containing '/'

@@ -49,8 +49,11 @@ Note that at least Python 3.8+ is required.
       * --keys path_to_your_keys_file
       * --keyspass 'your_paassword_for_keys_file'
       * --room: Specify a room or just use --all-rooms
-   * --no-media: This is left in the source code by original project. I didn't test that but I kept that in the code anyway.
+   * --no-media: Don't download media files.
+     * If an event is downloaded with this flag, you can never download its media files again(even without this flag) unless you delete the old database. 
+     * The same for `--no-avatars` flag.
    * --no-progress-bar: Disables progress bar while keeps basic log output.
+   * --no-avatars: Don't download avatars.
    * --no-logs: Disables log file output.
      * When using docker, these arguments can be added to environment variable ARGS, for example:
 

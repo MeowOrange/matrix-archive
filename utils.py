@@ -38,7 +38,7 @@ def log(message: object, file=sys.stdout):
         except:
             print('Log file error.', file=sys.stderr)
             sys.exit(1)
-        writer.write(str(message) + '\n')
+        writer.write(datetime.datetime.now().strftime("%Y-%m-%d %H-%M-%S") + '\n' + str(message) + '\n')
         writer.close()
 
 
