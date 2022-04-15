@@ -25,6 +25,7 @@ from nio import (
     RoomMemberEvent,
     RoomAvatarEvent,
     RoomMessageMedia,
+    Event,
     crypto,
     store,
     exceptions
@@ -205,6 +206,25 @@ def choose_filename(filename):
         filename = f"{start}({i}){ext}"
     return filename
 
+# log details of an event
+def log_event(event : Event):
+    if hasattr(event, 'url'):
+        log(f'Event Url: {event.url}')
+
+    avatar_url = dict(event.content).get('avatar_url')
+    if not (avatar_url is None):
+        log(f'Avatar Url: {avatar_url}')
+
+    if hasattr(event, 'body'):
+        log(f'Event Body: {event.body}')
+
+    if not dict(event.source).get("origin_server_ts") is None:
+        timestamp = dict(event.source).get("origin_server_ts")
+        date = datetime.datetime.fromtimestamp(timestamp / 1000)
+        log(f'Event Date: {date.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]}')
+
+    if hasattr(event, "source"):
+        log(f'Event Source: {json.dumps(event.source, indent=4)}')
 
 async def save_current_avatars(client: AsyncClient, room: MatrixRoom) -> None:
     room_short_id = str(room.room_id).split(':')[0].replace("!", "").replace("/", "_")
@@ -403,13 +423,7 @@ async def prepare_event_for_database(event, client, room, db, temp_dir, media_di
                         event_parsed['media_uuid'] = new_name
         except TypeError as tperror:
             log(f'Again... TypeError: {tperror}')
-            log(f'Event Url: {event.url}')
-            if hasattr(event, 'body'):
-                log(f'Event Body: {event.body}')
-            if not dict(event.source).get("origin_server_ts") is None:
-                log(f"Event Date: {event_parsed['date']}")
-            if hasattr(event, "source"):
-                log(f'Event Source: {json.dumps(event.source, indent=4)}')
+            log_event(event)
 
     return event_parsed
 

@@ -1,3 +1,6 @@
+# 2022-04-15 tag:1.6
+* Fixed bug for RoomMemberEvents
+
 # 2022-04-14 tag:1.5
 * Added flag --no-avatars
 * Implemented flag --no-media
