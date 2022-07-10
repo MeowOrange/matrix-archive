@@ -1,3 +1,6 @@
+# 2022-07-10 tag:1.7
+* Updated Matrix-Nio SDK and fixed bug for RoomMessagesError
+
 # 2022-04-15 tag:1.6
 * Fixed bug for RoomMemberEvents
 

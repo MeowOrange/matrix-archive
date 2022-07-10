@@ -30,6 +30,9 @@ from nio import (
     store,
     exceptions
 )
+from nio.responses import (
+	RoomMessagesError
+)
 
 import utils
 from db import (
@@ -255,6 +258,8 @@ async def fetch_room_events(
         response = await client.room_messages(
             room.room_id, start_token, limit=100, direction=direction
         )
+        if isinstance(response, RoomMessagesError):
+	        break
         if len(response.chunk) == 0:
             break
         events.extend(
